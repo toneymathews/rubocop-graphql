@@ -790,5 +790,125 @@ RSpec.describe RuboCop::Cop::GraphQL::FieldDefinitions, :config do
         end
       end
     end
+
+    context "when there are multiple field definitions" do
+      it "does not register an offense when field definitions are grouped together" do
+        expect_no_offenses(<<~RUBY)
+          class UserType < BaseType
+            field :first_name, Name, null: true
+            field :first_name, String, null: true
+
+            def first_name
+              object.contact_data.first_name
+            end
+
+            field :last_name, String, null: true
+
+            def last_name
+              object.contact_data.last_name
+            end
+          end
+        RUBY
+      end
+
+      it "registers an offense when resolver is defined before field definitions" do
+        expect_offense(<<~RUBY)
+          class UserType < BaseType
+            def first_name
+              object.contact_data.first_name
+            end
+            field :first_name, Name, null: true
+            field :first_name, String, null: true
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Define resolver method after field definition.
+
+            field :last_name, String, null: true
+
+            def last_name
+              object.contact_data.last_name
+            end
+          end
+        RUBY
+
+        expect_correction(<<~RUBY)
+          class UserType < BaseType
+            field :first_name, Name, null: true
+            field :first_name, String, null: true
+
+            def first_name
+              object.contact_data.first_name
+            end
+
+
+            field :last_name, String, null: true
+
+            def last_name
+              object.contact_data.last_name
+            end
+          end
+        RUBY
+      end
+
+      it "registers an offense when field definitions and resolver method are not in order" do
+        expect_offense(<<~RUBY)
+          class UserType < BaseType
+            field :first_name, Name, null: true
+
+            def first_name
+              object.contact_data.first_name
+            end
+
+            field :first_name, String, null: true
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Group multiple field definitions together.
+
+            field :last_name, String, null: true
+
+            def last_name
+              object.contact_data.last_name
+            end
+          end
+        RUBY
+
+        expect_correction(<<~RUBY)
+          class UserType < BaseType
+            field :first_name, Name, null: true
+
+            field :first_name, String, null: true
+
+            def first_name
+              object.contact_data.first_name
+            end
+
+            field :last_name, String, null: true
+
+            def last_name
+              object.contact_data.last_name
+            end
+          end
+        RUBY
+      end
+
+      it "registers an offense when field definitions are ungrouped" do
+        expect_offense(<<~RUBY)
+          class UserType < BaseType
+            field :first_name, String, null: true
+
+            field :last_name, String, null: true
+
+            field :first_name, Name, null: true
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Group multiple field definitions together.
+          end
+        RUBY
+
+        expect_correction(<<~RUBY)
+          class UserType < BaseType
+            field :first_name, String, null: true
+
+            field :first_name, Name, null: true
+
+            field :last_name, String, null: true
+          end
+        RUBY
+      end
+    end
   end
 end
