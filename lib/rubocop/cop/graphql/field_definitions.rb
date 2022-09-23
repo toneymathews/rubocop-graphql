@@ -112,8 +112,21 @@ module RuboCop
         RESOLVER_AFTER_FIELD_MSG = "Define resolver method after field definition."
         RESOLVER_AFTER_LAST_FIELD_MSG = "Define resolver method after last field definition " \
           "sharing resolver method."
+        MULTIPLE_FIELD_DEFINITIONS_MSG = "Group multiple field definitions together."
 
         def check_resolver_is_defined_after_definition(field)
+          multiple_field_definitions = multiple_field_definitions(field)
+
+          return if field.node != multiple_field_definitions.last.node
+
+          has_ungrouped_definitions = multiple_field_definitions.size > 1 && has_ungrouped_definitions?(multiple_field_definitions)
+
+          if has_ungrouped_definitions
+            add_offense(field.node, message: MULTIPLE_FIELD_DEFINITIONS_MSG) do |corrector|
+              group_multiple_field_definitions(corrector, multiple_field_definitions)
+            end
+          end
+
           return if field.kwargs.resolver || field.kwargs.method || field.kwargs.hash_key
 
           method_definition = field.schema_member.find_method_definition(field.resolver_method_name)
@@ -130,19 +143,63 @@ module RuboCop
           end
         end
 
+        def multiple_field_definitions(field)
+          fields = field.schema_member.body
+                        .select { |node| field?(node) }
+                        .map do |node|
+                          f = field_definition_with_body?(node) ? node.children.first : node
+                          RuboCop::GraphQL::Field.new(f)
+                        end
+          fields.select { |f| f.name == field.name }
+        end
+
+        def group_multiple_field_definitions(corrector, multiple_field_definitions)
+          multiple_field_definitions.each_cons(2) do |first, second|
+            next unless field_sibling_index(second) - field_sibling_index(first) > 1
+
+            first = field_definition_with_body?(first.node.parent) ? first.node.parent : first.node
+            second = field_definition_with_body?(second.node.parent) ? second.node.parent : second.node
+
+            insert_new_field(corrector, first, second)
+            remove_old_field(corrector, second)
+          end
+        end
+
+        def insert_new_field(corrector, first, second)
+          source_to_insert = "\n\n#{indent(second)}#{second.source}"
+          field_definition_range = range_including_heredoc(first)
+          corrector.insert_after(field_definition_range, source_to_insert)
+        end
+
+        def remove_old_field(corrector, second)
+          range_to_remove = range_with_surrounding_space(
+            range: second.loc.expression, side: :left
+          )
+          corrector.remove(range_to_remove)
+        end
+
+        def has_ungrouped_definitions?(multiple_field_definitions)
+          sibling_indices = multiple_field_definitions.map do |field|
+            field_sibling_index(field)
+          end
+
+          sibling_indices.each_cons(2).any? { |index1, index2| index2 - index1 > 1 }
+        end
+
+        def field_sibling_index(field)
+          if field_definition_with_body?(field.parent)
+            field.parent.sibling_index
+          else
+            field.sibling_index
+          end
+        end
+
         def offense_message(single_field_using_resolver)
           single_field_using_resolver ? RESOLVER_AFTER_FIELD_MSG : RESOLVER_AFTER_LAST_FIELD_MSG
         end
 
         def resolver_defined_after_definition?(field, method_definition)
-          field_sibling_index =
-            if field_definition_with_body?(field.parent)
-              field.parent.sibling_index
-            else
-              field.sibling_index
-            end
-
-          field_to_resolver_offset = method_definition.sibling_index - field_sibling_index
+          field_to_resolver_offset = method_definition.sibling_index - field_sibling_index(field)
 
           case field_to_resolver_offset
           when 1 # resolver is immediately after field definition
